@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "forecasting"
+version = "0.0.1"
+description = "This is a collection of different forecasting experiments with various datasets"
+authors = ["Sebastian Engels <me@sebastian-engels.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+pandas = "^2.2.0"
+numpy = "^1.26.4"
+matplotlib = "^3.8.2"
+jupyter = "^1.0.0"
+seaborn = "^0.13.2"
+ipykernel = "^6.29.2"
+nbdime = "^4.0.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
