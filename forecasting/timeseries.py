@@ -123,7 +123,7 @@ class TimeSeries:
             sub_ts = ts.loc[(slice(None), *idx), :].copy()
             ax = axes[i]
             for p in periods:
-                ts_p = sub_ts.loc[ts[period] == p, :].copy()
+                ts_p = sub_ts.loc[ts[period] == p, :].sort_values(by=freq).copy()
                 x = ts_p[freq]
                 y = ts_p[column]
                 if monochrome is True:
@@ -154,4 +154,55 @@ class TimeSeries:
             ax.set_ylabel(column)
             ax.set_title(f"Season ({period}) for {idx}")
 
+        plt.tight_layout()
         return axes
+
+    def plot_subseries(
+        self, column: str, freq: str, resampler: str = None
+    ) -> plt.Figure:
+        ts = self._get_timestamp_index()
+        ts[freq] = ts.index.get_level_values(0).map(lambda x: getattr(x, freq))
+        ts = ts.sort_values(by=freq)
+
+        unique_idx_comb = self._get_idx_combinations(ts)
+        unique_freq = ts[freq].unique()
+
+        nrows = len(unique_idx_comb)
+        ncols = len(unique_freq)
+
+        fig = plt.figure(constrained_layout=True, figsize=(12, nrows * 6))
+        fig.suptitle(f"Subseries for {column} by {freq}")
+
+        # create 3x1 subfigs
+        subfigs = fig.subfigures(nrows=nrows, ncols=1)
+
+        if not isinstance(subfigs, np.ndarray):
+            subfigs = np.array([subfigs])
+
+        for subfig, idx in zip(subfigs, unique_idx_comb):
+            sub_ts = ts.loc[(slice(None), *idx), :].copy()
+            # create 1x3 subplots per subfig
+            axes = subfig.subplots(nrows=1, ncols=ncols, sharey=True, sharex=True)
+            if not isinstance(axes, np.ndarray):
+                axes = np.array([axes])
+            for i, (ax, f) in enumerate(zip(axes, unique_freq)):
+                if i == 0:
+                    ax.set_ylabel(column)
+                ts_p = sub_ts.loc[ts[freq] == f, :].sort_index().copy()
+                if resampler is not None:
+                    # Resample level 0
+                    ts_p = (
+                        ts_p.groupby(pd.Grouper(freq=resampler, level=0))
+                        .mean()
+                        .dropna()
+                    )
+
+                x = ts_p.index.get_level_values(0)
+                y = ts_p[column]
+                ax.plot(x, y, label=f, lw=0.5, color="black")
+                ax.axhline(y.mean(), color="red", linestyle="--", lw=1)
+                ax.set_xlabel(sub_ts.index.names[0])
+                ax.set_title(f"{f}")
+            subfig.suptitle(f"{idx}")
+
+        return fig

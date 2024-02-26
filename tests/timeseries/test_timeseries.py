@@ -112,6 +112,29 @@ def test_ts_plot_default(ts_data):
     assert isinstance(axes[0].lines[0].get_xdata()[0], np.datetime64)
 
 
+def test_ts_large_nr_plot():
+    # Generate a large number of index combinations
+    n = 50
+    dates = pd.date_range(start="2020-01-01", periods=n, freq="D").to_period("D")
+    families = [f"family_{i}" for i in range(n)]
+    stores = [f"store_{i}" for i in range(n)]
+    idx = pd.MultiIndex.from_product(
+        [dates, families, stores], names=["date", "family", "store_nbr"]
+    )
+    values = {"sales": [i for i in range(n * n * n)]}
+    df = pd.DataFrame(values, index=idx)
+
+    ts = TimeSeries(df)
+
+    with pytest.raises(ValueError) as exp:
+        ts.plot()
+
+    assert (
+        str(exp.value)
+        == "The number of index combinations is too large to plot individually."
+    )
+
+
 def test_ts_plot_multi_col(ts_multi_col_data):
     ts = TimeSeries(ts_multi_col_data)
 
@@ -148,10 +171,16 @@ def test_ts_plot_subset(ts_data):
     assert reduce(lambda x, y: x + y, [len(ax.get_lines()) for ax in axes]) == 2
 
 
+def test_ts_get_idx_combinations(ts_data):
+    ts = TimeSeries(ts_data)
+    idx_comb = ts._get_idx_combinations(ts.ts)
+    assert (idx_comb == ts_data.droplevel(0).index.unique()).all()
+
+
 def test_ts_plot_seasonal_default(ts_data):
     ts = TimeSeries(ts_data)
 
-    ax = ts.plot_seasonal(
+    axes = ts.plot_seasonal(
         column="sales",
         period="week",
         freq="day_of_week",
@@ -159,29 +188,29 @@ def test_ts_plot_seasonal_default(ts_data):
     )
 
     wks = ts.ts.index.get_level_values(0).week.unique()
-    assert len(ax[0].get_lines()) == len(wks)
-    assert ax[0].get_lines()[0]._alpha == 1 / np.sqrt(len(wks))
-    assert ax[0].get_lines()[0].get_color() == "red"
-    assert ax[0].get_lines()[0].get_linewidth() == 0.5
-    assert ax[0].get_xlabel() == "day_of_week"
-    assert ax[0].get_ylabel() == "sales"
-    assert ax[0].get_title() == "Season (week) for ('GROCERY I', 1)"
+    assert len(axes[0].get_lines()) == len(wks)
+    assert axes[0].get_lines()[0]._alpha == 1 / np.sqrt(len(wks))
+    assert axes[0].get_lines()[0].get_color() == "red"
+    assert axes[0].get_lines()[0].get_linewidth() == 0.5
+    assert axes[0].get_xlabel() == "day_of_week"
+    assert axes[0].get_ylabel() == "sales"
+    assert axes[0].get_title() == "Season (week) for ('GROCERY I', 1)"
 
 
 def test_ts_plot_non_mono_seasonal(ts_data):
     ts = TimeSeries(ts_data)
-    ax = ts.plot_seasonal(
+    axes = ts.plot_seasonal(
         column="sales", period="week", freq="day_of_week", monochrome=False
     )
 
-    assert ax[0].get_lines()[0].get_color() == "#1f77b4"
-    assert ax[0].get_lines()[1].get_color() == "#ff7f0e"
-    assert ax[0].get_lines()[2].get_color() == "#2ca02c"
+    assert axes[0].get_lines()[0].get_color() == "#1f77b4"
+    assert axes[0].get_lines()[1].get_color() == "#ff7f0e"
+    assert axes[0].get_lines()[2].get_color() == "#2ca02c"
 
 
 def test_ts_plot_seasonal_annot(ts_data):
     ts = TimeSeries(ts_data)
-    ax = ts.plot_seasonal(
+    axes = ts.plot_seasonal(
         column="sales",
         period="week",
         freq="day_of_week",
@@ -189,42 +218,62 @@ def test_ts_plot_seasonal_annot(ts_data):
         annot=True,
     )
 
-    assert len(ax[0].texts) == 3 * 2  # 3 weeks, 2 annotations per week
-    assert ax[0].texts[0].get_text() == "1"
-    assert ax[0].texts[1].get_text() == "1"
-    assert ax[0].texts[0].get_position() == (1, 0)
-    assert ax[0].texts[1].get_position() == (6, 723)
-    assert ax[0].texts[4].get_text() == "3"
-    assert ax[0].texts[4].get_position() == (0, 1902)
-    assert ax[0].texts[5].get_position() == (1, 1671)
+    assert len(axes[0].texts) == 3 * 2  # 3 weeks, 2 annotations per week
+    assert axes[0].texts[0].get_text() == "1"
+    assert axes[0].texts[1].get_text() == "1"
+    assert axes[0].texts[0].get_position() == (1, 0)
+    assert axes[0].texts[1].get_position() == (6, 723)
+    assert axes[0].texts[4].get_text() == "3"
+    assert axes[0].texts[4].get_position() == (0, 1902)
+    assert axes[0].texts[5].get_position() == (1, 1671)
 
-    assert ax[0].texts[0].get_color() == "red"
+    assert axes[0].texts[0].get_color() == "red"
 
 
-def test_ts_get_idx_combinations(ts_data):
+def test_ts_plot_subseries(ts_data):
     ts = TimeSeries(ts_data)
-    idx_comb = ts._get_idx_combinations(ts.ts)
-    assert (idx_comb == ts_data.droplevel(0).index.unique()).all()
+    uniq_idx_comb = ts._get_idx_combinations(ts.ts)
+
+    fig = ts.plot_subseries(column="sales", freq="day_of_week")
+
+    # Check suptitle
+    assert fig.get_suptitle() == "Subseries for sales by day_of_week"
+    axes = fig.get_axes()
+    assert len(axes) == len(uniq_idx_comb) * 7
+    ax_0 = axes[0]
+    assert ax_0.get_ylabel() == "sales"
+    ax_1 = axes[1]
+    assert ax_1.get_ylabel() == ""
+
+    # Check line color
+    assert ax_0.get_lines()[0].get_color() == "black"
+    assert ax_0.get_lines()[0].get_linewidth() == 0.5
+    assert ax_0.get_lines()[1].get_color() == "red"
+    assert ax_0.get_lines()[1].get_linewidth() == 1
+    assert ax_0.get_lines()[1].get_linestyle() == "--"
 
 
-def test_ts_large_nr_plot():
-    # Generate a large number of index combinations
-    n = 50
-    dates = pd.date_range(start="2020-01-01", periods=n, freq="D").to_period("D")
-    families = [f"family_{i}" for i in range(n)]
-    stores = [f"store_{i}" for i in range(n)]
-    idx = pd.MultiIndex.from_product(
-        [dates, families, stores], names=["date", "family", "store_nbr"]
-    )
-    values = {"sales": [i for i in range(n * n * n)]}
-    df = pd.DataFrame(values, index=idx)
+def test_ts_plot_subseries_resampled(ts_data):
+    """
+    Adequate use of resampler to make sure comparisons are at a useful
+    aggregation level (e.g. splitting by month but looking at daily level
+    is rarely useful as there will be large flat lines in between two Januaries)
+    """
 
-    ts = TimeSeries(df)
+    ts = TimeSeries(ts_data)
+    uniq_idx_comb = ts._get_idx_combinations(ts.ts)
+    idx = uniq_idx_comb[0]
 
-    with pytest.raises(ValueError) as exp:
-        ts.plot()
+    fig = ts.plot_subseries(column="sales", freq="month", resampler="ME")
 
-    assert (
-        str(exp.value)
-        == "The number of index combinations is too large to plot individually."
-    )
+    ts_data_check = ts._get_timestamp_index()
+    ts_data_check = (
+        ts_data_check.loc[(slice(None), *idx)]
+        .groupby(pd.Grouper(freq="ME", level=0))
+        .mean()
+        .dropna()
+    )["sales"].values
+
+    y = fig.get_axes()[0].get_lines()[0].get_ydata()
+    assert len(y) == 1
+    assert (ts_data_check == y).all()
