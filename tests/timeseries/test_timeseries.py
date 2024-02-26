@@ -104,6 +104,10 @@ def test_ts_plot_default(ts_data):
     assert fig.get_figwidth() == 12
     assert fig.get_figheight() == 3 * idx_len
 
+    # Check Line color
+    assert axes[0].lines[0].get_color() == "black"
+    assert axes[0].lines[0].get_linewidth() == 0.5
+
     # Check that x-axis is a DatetimeIndex
     assert isinstance(axes[0].lines[0].get_xdata()[0], np.datetime64)
 
@@ -132,16 +136,75 @@ def test_ts_plot_multi_col(ts_multi_col_data):
 def test_ts_plot_subset(ts_data):
     ts = TimeSeries(ts_data)
 
-    ax = ts.plot(index=(slice(None), "CLEANING", 1))
-    assert isinstance(ax, plt.Axes)
-    assert len(ax.get_lines()) == 1
-    assert ax.lines[0].get_xdata().shape == (
+    axes = ts.plot(index=(slice(None), "CLEANING", 1))
+    assert isinstance(axes[0], plt.Axes)
+    assert len(axes[0].get_lines()) == 1
+    assert axes[0].lines[0].get_xdata().shape == (
         len(ts_data.loc[(slice(None), "CLEANING", 1), :].index),
     )
 
     axes = ts.plot(index=(slice(None), slice(None), 1))
     assert len(axes) == 2
     assert reduce(lambda x, y: x + y, [len(ax.get_lines()) for ax in axes]) == 2
+
+
+def test_ts_plot_seasonal_default(ts_data):
+    ts = TimeSeries(ts_data)
+
+    ax = ts.plot_seasonal(
+        column="sales",
+        period="week",
+        freq="day_of_week",
+        index=(slice(None), "GROCERY I", 1),
+    )
+
+    wks = ts.ts.index.get_level_values(0).week.unique()
+    assert len(ax[0].get_lines()) == len(wks)
+    assert ax[0].get_lines()[0]._alpha == 1 / np.sqrt(len(wks))
+    assert ax[0].get_lines()[0].get_color() == "red"
+    assert ax[0].get_lines()[0].get_linewidth() == 0.5
+    assert ax[0].get_xlabel() == "day_of_week"
+    assert ax[0].get_ylabel() == "sales"
+    assert ax[0].get_title() == "Season (week) for ('GROCERY I', 1)"
+
+
+def test_ts_plot_non_mono_seasonal(ts_data):
+    ts = TimeSeries(ts_data)
+    ax = ts.plot_seasonal(
+        column="sales", period="week", freq="day_of_week", monochrome=False
+    )
+
+    assert ax[0].get_lines()[0].get_color() == "#1f77b4"
+    assert ax[0].get_lines()[1].get_color() == "#ff7f0e"
+    assert ax[0].get_lines()[2].get_color() == "#2ca02c"
+
+
+def test_ts_plot_seasonal_annot(ts_data):
+    ts = TimeSeries(ts_data)
+    ax = ts.plot_seasonal(
+        column="sales",
+        period="week",
+        freq="day_of_week",
+        index=(slice(None), "GROCERY I", 1),
+        annot=True,
+    )
+
+    assert len(ax[0].texts) == 3 * 2  # 3 weeks, 2 annotations per week
+    assert ax[0].texts[0].get_text() == "1"
+    assert ax[0].texts[1].get_text() == "1"
+    assert ax[0].texts[0].get_position() == (1, 0)
+    assert ax[0].texts[1].get_position() == (6, 723)
+    assert ax[0].texts[4].get_text() == "3"
+    assert ax[0].texts[4].get_position() == (0, 1902)
+    assert ax[0].texts[5].get_position() == (1, 1671)
+
+    assert ax[0].texts[0].get_color() == "red"
+
+
+def test_ts_get_idx_combinations(ts_data):
+    ts = TimeSeries(ts_data)
+    idx_comb = ts._get_idx_combinations(ts.ts)
+    assert (idx_comb == ts_data.droplevel(0).index.unique()).all()
 
 
 def test_ts_large_nr_plot():
