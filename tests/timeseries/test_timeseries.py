@@ -2,6 +2,7 @@ import pytest
 
 import numpy as np
 import pandas as pd
+import io
 from matplotlib.collections import PathCollection
 from matplotlib.figure import SubFigure
 import matplotlib.pyplot as plt
@@ -337,3 +338,23 @@ def test_ts_plot_pairs(ts_corr_dummy_data):
         np.corrcoef(corr_pair["sales"], df.loc[idx, "add_corr_col"])[0][1], 2
     )
     assert axes[0][2].get_children()[0].get_text() == f"r^2 = {r_2_rand}"
+
+
+def test_ts_plot_pairs_hue(ts_corr_dummy_data):
+    df = ts_corr_dummy_data
+    df["day_of_week"] = df.index.get_level_values(0).dayofweek.astype("str")
+    ts = TimeSeries(df)
+
+    idx = pd.IndexSlice["2014", slice(None), slice(None)]
+    axes = ts.plot_pairs(index=idx, hue="day_of_week")
+
+    # Force plot to render to check that the hue is working
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png")
+    buf.seek(0)
+
+    assert isinstance(axes.flatten()[2].get_children()[0], PathCollection)
+    assert (
+        len(np.unique(axes.flatten()[2].get_children()[0].get_facecolors(), axis=0))
+        == 7
+    )
