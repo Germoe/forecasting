@@ -1,6 +1,9 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+
+import scipy
 
 
 class TimeSeries:
@@ -158,7 +161,7 @@ class TimeSeries:
         return axes
 
     def plot_subseries(
-        self, column: str, freq: str, resampler: str = None
+        self, column: str, freq: str, resampler: str = None, x_granularity=None
     ) -> plt.Figure:
         ts = self._get_timestamp_index()
         ts[freq] = ts.index.get_level_values(0).map(lambda x: getattr(x, freq))
@@ -170,8 +173,10 @@ class TimeSeries:
         nrows = len(unique_idx_comb)
         ncols = len(unique_freq)
 
-        fig = plt.figure(constrained_layout=True, figsize=(12, nrows * 6))
-        fig.suptitle(f"Subseries for {column} by {freq}")
+        fig = plt.figure(constrained_layout=False, figsize=(12, nrows * 6))
+
+        # Make sure that super title is above all plots
+        fig.suptitle(f"Subseries for {column} by {freq}", fontsize=16, y=1.01)
 
         # create 3x1 subfigs
         subfigs = fig.subfigures(nrows=nrows, ncols=1)
@@ -188,6 +193,8 @@ class TimeSeries:
             for i, (ax, f) in enumerate(zip(axes, unique_freq)):
                 if i == 0:
                     ax.set_ylabel(column)
+                else:
+                    ax.get_yaxis().set_visible(False)
                 ts_p = sub_ts.loc[ts[freq] == f, :].sort_index().copy()
                 if resampler is not None:
                     # Resample level 0
@@ -198,11 +205,84 @@ class TimeSeries:
                     )
 
                 x = ts_p.index.get_level_values(0)
+                if x_granularity is not None:
+                    x = x.map(lambda x: getattr(x, x_granularity))
                 y = ts_p[column]
                 ax.plot(x, y, label=f, lw=0.5, color="black")
                 ax.axhline(y.mean(), color="red", linestyle="--", lw=1)
+
                 ax.set_xlabel(sub_ts.index.names[0])
+                if x_granularity is not None:
+                    ax.set_xlabel(x_granularity)
                 ax.set_title(f"{f}")
+
+            subfig.autofmt_xdate()
+            subfig.subplots_adjust(wspace=0, hspace=0)
             subfig.suptitle(f"{idx}")
 
         return fig
+
+    def plot_pairs(self, index=None):
+        ts = self.ts.copy()
+        if index is not None:
+            ts = ts.loc[index, :].copy()
+
+        n = len(ts.columns)
+        _, axes = plt.subplots(nrows=n, ncols=n, figsize=(12, 12))
+
+        # Plot Distributions
+        for i, (row_axes, row) in enumerate(zip(axes, ts.columns)):
+            for j, (ax, col) in enumerate(zip(row_axes, ts.columns)):
+                if i == 0:
+                    ax.set_title(col)
+                if i < n - 1:
+                    ax.get_xaxis().set_visible(False)
+                else:
+                    ax.set_xlabel(col)
+
+                    x_range = ts[col].max() - ts[col].min()
+                    ax.set_xlim(
+                        ts[col].min() - 0.1 * x_range, ts[col].max() + 0.1 * x_range
+                    )
+                if j == 0:
+                    ax.set_ylabel(row)
+
+                    if i != j:
+                        # Don't apply effect to the diagonal distribution plot
+                        y_range = ts[row].max() - ts[row].min()
+                        ax.set_ylim(
+                            ts[row].min() - 0.1 * y_range, ts[row].max() + 0.1 * y_range
+                        )
+                else:
+                    ax.get_yaxis().set_visible(False)
+                loc = i - j
+                if loc == 0:
+                    # KDE Plot
+                    kde_vals = ts[col].dropna()
+                    kde = scipy.stats.gaussian_kde(kde_vals)
+                    x = np.linspace(kde_vals.min(), kde_vals.max(), 1000)
+                    y = kde(x)
+
+                    ax.plot(x, y, color="black")
+                elif loc > 0:
+                    alpha = 1 / (np.log(len(ts[col]) * len(ts[row]) / 2))
+                    ax.scatter(
+                        x=ts[col],
+                        y=ts[row],
+                        alpha=alpha,
+                        color="black",
+                        s=5,
+                    )
+                elif loc < 1:
+                    r_2 = np.round(np.corrcoef(ts[row], ts[col])[0][1], 2)
+                    ax.text(
+                        0.5,
+                        0.5,
+                        f"r^2 = {r_2}",
+                        fontsize=max(6, 17 - len(ts.columns)),
+                        ha="center",
+                        color="black",
+                    )
+        plt.subplots_adjust(wspace=0, hspace=0)
+
+        return axes

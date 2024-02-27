@@ -2,6 +2,8 @@ import pytest
 
 import numpy as np
 import pandas as pd
+from matplotlib.collections import PathCollection
+from matplotlib.figure import SubFigure
 import matplotlib.pyplot as plt
 from forecasting.timeseries import TimeSeries
 
@@ -11,6 +13,7 @@ ts_multi_idx_dummy_path = "./tests/timeseries/ts_multi_idx_dummy.json"
 ts_multi_col_multi_idx_dummy_path = (
     "./tests/timeseries/ts_multi_col_multi_idx_dummy.json"
 )
+ts_corr_dummy_path = "./tests/timeseries/ts_corr_dummy.json"
 
 
 @pytest.fixture
@@ -27,6 +30,17 @@ def ts_data():
 @pytest.fixture
 def ts_multi_col_data():
     df = pd.read_json(ts_multi_col_multi_idx_dummy_path)
+    df["date"] = pd.to_datetime(df["date"])
+    df.set_index(["date"], inplace=True)
+    df.index = df.index.to_period("D")
+    df.set_index(["family", "store_nbr"], append=True, inplace=True)
+
+    return df
+
+
+@pytest.fixture
+def ts_corr_dummy_data():
+    df = pd.read_json(ts_corr_dummy_path)
     df["date"] = pd.to_datetime(df["date"])
     df.set_index(["date"], inplace=True)
     df.index = df.index.to_period("D")
@@ -252,6 +266,10 @@ def test_ts_plot_subseries(ts_data):
     assert ax_0.get_lines()[1].get_linewidth() == 1
     assert ax_0.get_lines()[1].get_linestyle() == "--"
 
+    # Check wspace == 0 of subfigures
+    subfigs = [subfig for subfig in fig.get_children() if isinstance(subfig, SubFigure)]
+    assert len(subfigs) == len(uniq_idx_comb)
+
 
 def test_ts_plot_subseries_resampled(ts_data):
     """
@@ -277,3 +295,45 @@ def test_ts_plot_subseries_resampled(ts_data):
     y = fig.get_axes()[0].get_lines()[0].get_ydata()
     assert len(y) == 1
     assert (ts_data_check == y).all()
+
+
+def test_ts_plot_subseries_xgranularity(ts_data):
+    """
+    Test that the x-axis granularity is set to the frequency of the subseries.
+    """
+
+    ts = TimeSeries(ts_data)
+    fig = ts.plot_subseries(column="sales", freq="month", x_granularity="year")
+
+    axes = fig.get_axes()
+    for ax in axes:
+        assert ax.get_xlabel() == "year"
+        assert ax.get_lines()[0].get_xdata()[0] == 2013
+
+
+def test_ts_plot_pairs(ts_corr_dummy_data):
+    df = ts_corr_dummy_data
+    df["add_corr_col"] = np.random.rand(len(df))
+    ts = TimeSeries(ts_corr_dummy_data)
+
+    idx = pd.IndexSlice["2014", slice(None), slice(None)]
+    axes = ts.plot_pairs(index=idx)
+
+    assert len(axes.flatten()) == len(df.columns) ** 2
+    assert isinstance(axes[0][0].get_lines()[0], plt.Line2D)
+    assert axes[1][0].has_data()
+    assert axes[0][0].get_title() == "sales"
+    assert axes[0][1].get_title() == "onpromotion"
+    assert axes[0][0].get_ylabel() == "sales"
+    assert axes[1][0].get_ylabel() == "onpromotion"
+    assert isinstance(axes[1][0].get_children()[0], PathCollection)
+    assert isinstance(axes[0][1].get_children()[0], plt.Text)
+    corr_pair = ts.ts.loc[idx, ["sales", "onpromotion"]]
+    r_2 = np.round(np.corrcoef(corr_pair["sales"], corr_pair["onpromotion"])[0][1], 2)
+    assert axes[0][1].get_children()[0].get_text() == f"r^2 = {r_2}"
+    assert axes[0][1].get_children()[0].get_text() != f"nan"
+
+    r_2_rand = np.round(
+        np.corrcoef(corr_pair["sales"], df.loc[idx, "add_corr_col"])[0][1], 2
+    )
+    assert axes[0][2].get_children()[0].get_text() == f"r^2 = {r_2_rand}"
