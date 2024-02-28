@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 
 import scipy
+import math
 
 
 class TimeSeries:
@@ -23,6 +24,7 @@ class TimeSeries:
         if df.empty:
             raise ValueError("Empty DataFrame is not allowed.")
         self.ts = df.copy().sort_index()
+        self.non_date_index_levels = list(range(1, len(self.ts.index.levels)))
 
     def __repr__(self) -> str:
         return self.ts.head().__repr__()
@@ -31,11 +33,9 @@ class TimeSeries:
         """
         Convert the PeriodIndex to a TimestampIndex.
         """
-        levels = len(self.ts.index.levels)
-        levels = list(range(1, levels))
-        ts_dt = self.ts.copy().unstack(level=levels)
+        ts_dt = self.ts.copy().unstack(level=self.non_date_index_levels)
         ts_dt.index = ts_dt.index.to_timestamp()
-        ts_dt = ts_dt.stack(level=levels, future_stack=True)
+        ts_dt = ts_dt.stack(level=self.non_date_index_levels, future_stack=True)
         return ts_dt
 
     def _get_idx_combinations(self, data: pd.DataFrame) -> list:
@@ -43,7 +43,44 @@ class TimeSeries:
         Get all the unique index combinations.
         """
         idx_comb = data.droplevel(0).index.unique()
+        # Reshape a single index to a multiindex
+        if not isinstance(idx_comb[0], tuple):
+            idx_comb = pd.MultiIndex.from_tuples([(idx,) for idx in idx_comb])
         return idx_comb
+
+    def make_lags(self, col: str, lags: list[int]) -> pd.DataFrame:
+        """
+        Create lagged columns for the time series.
+
+        :param col: The column to create lags for.
+        :param lags: The lags to create. Is a list of integers.
+        :return: A DataFrame with the lagged columns.
+        """
+
+        ts = self.ts.loc[:, [col]].copy()
+        ts[[f"{col}_lag_{lag}" for lag in lags]] = (
+            ts[col].groupby(level=self.non_date_index_levels).shift(lags)
+        )
+
+        ts = ts.drop(columns=[col])
+        return ts
+
+    def make_leads(self, col: str, leads: list[int]) -> pd.DataFrame:
+        """
+        Create lead columns for the time series.
+
+        :param col: The column to create leads for.
+        :param leads: The leads to create. Is a list of integers.
+        :return: A DataFrame with the lead columns.
+        """
+
+        ts = self.ts.loc[:, [col]].copy()
+        leads = [-lead for lead in leads if lead > 0]
+        ts[[f"{col}_lead_{-lead}" for lead in leads]] = (
+            ts[col].groupby(level=self.non_date_index_levels).shift(leads)
+        )
+        ts = ts.drop(columns=[col])
+        return ts
 
     def plot(self, index: tuple = None, columns: list = None) -> plt.Axes:
         """
@@ -78,10 +115,16 @@ class TimeSeries:
             ax.plot(
                 data.index.get_level_values(0),
                 data.values,
-                label=idx,
-                color="black",
+                label=str(idx),
+                color="black" if data.values.shape[1] == 1 else None,
                 lw=0.5,
             )
+
+            ax.set_title(f"{','.join(data.columns)} for {idx}")
+            ax.set_xlabel(data.index.names[0])
+            ax.set_ylabel(",".join(data.columns))
+
+        plt.tight_layout()
 
         return axes
 
@@ -105,6 +148,7 @@ class TimeSeries:
         :return: A matplotlib Axes object.
         """
         ts = self._get_timestamp_index()
+        ts = ts.loc[:, [column]]
 
         if index is not None:
             ts = ts.loc[index, :].copy()
@@ -113,12 +157,21 @@ class TimeSeries:
         nrows = len(unique_idx_comb)
         ncols = 1
 
+        if resampler is not None:
+            # Resample level 0
+            ts = (
+                ts.unstack(level=[1])
+                .groupby(pd.Grouper(freq=resampler, level=0))
+                .sum()
+                .stack(level=[1], future_stack=True)
+            )
+
         ts[period] = ts.index.get_level_values(0).map(lambda x: getattr(x, period))
         ts[freq] = ts.index.get_level_values(0).map(lambda x: getattr(x, freq))
         periods = ts.loc[:, period].unique()
-        alpha = max(0.01, 1 / np.sqrt(len(periods)))
+        alpha = 0.8
 
-        _, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, nrows * 3))
+        _, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, nrows * 6))
 
         if not isinstance(axes, np.ndarray):
             axes = np.array([axes])
@@ -128,13 +181,6 @@ class TimeSeries:
             ax = axes[i]
             for p in periods:
                 ts_p = sub_ts.loc[ts[period] == p, :].copy()
-                if resampler is not None:
-                    # Resample level 0
-                    ts_p = (
-                        ts_p.groupby(pd.Grouper(freq=resampler, level=0))
-                        .mean()
-                        .dropna()
-                    )
                 ts_p = ts_p.sort_values(by=freq)
 
                 x = ts_p[freq]
@@ -188,7 +234,6 @@ class TimeSeries:
         # Make sure that super title is above all plots
         fig.suptitle(f"Subseries for {column} by {freq}", fontsize=16, y=1.01)
 
-        # create 3x1 subfigs
         subfigs = fig.subfigures(nrows=nrows, ncols=1)
 
         if not isinstance(subfigs, np.ndarray):
@@ -306,4 +351,77 @@ class TimeSeries:
                     )
         plt.subplots_adjust(wspace=0, hspace=0)
 
+        return axes
+
+    def plot_lags(self, col: str, lags: list[int]) -> np.ndarray:
+        ts = TimeSeries(self.ts.loc[:, [col]])
+        ts_lags = ts.make_lags(col, lags)
+        ts = pd.concat([ts.ts, ts_lags], axis=1)
+        ts = ts.dropna()
+
+        padding = 0.05 * ts.max().max()
+        ncols = 3
+
+        if len(lags) < 3:
+            ncols = len(lags)
+            nrows = 1
+        else:
+            nrows = math.ceil(len(lags) / ncols)
+
+        fig, axes = plt.subplots(
+            nrows=nrows, ncols=ncols, figsize=(12, 4 * nrows), sharey=True
+        )
+        if not isinstance(axes, np.ndarray):
+            axes = np.array([[axes]])
+
+        if len(axes.shape) == 1:
+            axes = axes.reshape(-1, axes.shape[0])
+
+        lag_axes = axes.flatten()
+
+        for lag, ax in zip(lags, lag_axes):
+            ax.scatter(
+                ts[f"{col}_lag_{lag}"],
+                ts[col],
+                label=f"Lag {lag}",
+                alpha=0.15,
+                s=2,
+                color="black",
+            )
+            r_2 = np.round(np.corrcoef(ts[f"{col}_lag_{lag}"], ts[col])[0][1], 2)
+            ax.text(
+                0.95,
+                0.05,
+                f"r^2 = {r_2}",
+                fontsize=max(6, 17 - len(ts.columns)),
+                ha="right",
+                color="red",
+                transform=ax.transAxes,
+            )
+            ax.legend(loc="upper left")
+
+        for i, ax_row in enumerate(axes):
+            for j, ax in enumerate(ax_row):
+                if ax.has_data():
+                    ax.plot(
+                        [0, 1],
+                        [0, 1],
+                        transform=ax.transAxes,
+                        color="red",
+                        linestyle="--",
+                        alpha=0.5,
+                    )
+                ax.set_xlim(ts.min().min() - padding, ts.max().max() + padding)
+                ax.set_ylim(ts.min().min() - padding, ts.max().max() + padding)
+                if j == 0:
+                    ax.set_ylabel(col)
+                else:
+                    ax.get_yaxis().set_visible(False)
+                if i == (axes.shape[0] - 1):
+                    ax.set_xlabel(col)
+                else:
+                    ax.get_xaxis().set_visible(False)
+
+        fig.suptitle(f"Lags for {col}")
+        plt.subplots_adjust(wspace=0, hspace=0)
         return axes

@@ -90,6 +90,68 @@ def test_periodindex_exists():
     assert str(exp.value) == "The DataFrame must have a PeriodIndex at level 0."
 
 
+def test_ts_make_lags(ts_multi_col_data):
+    df = ts_multi_col_data
+    ts = TimeSeries(df)
+
+    # Test the lag using a list
+    lags = ts.make_lags(col="sales", lags=[1, 3])
+
+    assert len(lags.columns) == 2
+    assert lags.columns[0] == "sales_lag_1"
+    assert lags.columns[1] == "sales_lag_3"
+
+    idx = pd.IndexSlice[:, ["GROCERY I"], [1]]
+    assert (
+        lags.loc[idx, "sales_lag_1"].dropna()
+        == ts_multi_col_data.loc[idx, "sales"].shift(1).dropna()
+    ).all()
+    assert (
+        lags.loc[idx, "sales_lag_3"].dropna()
+        == ts_multi_col_data.loc[idx, "sales"].shift(3).dropna()
+    ).all()
+
+
+def test_ts_make_leads(ts_multi_col_data):
+    df = ts_multi_col_data
+    ts = TimeSeries(df)
+
+    # Test the lead using a list
+    leads = ts.make_leads(col="sales", leads=[1, 3])
+
+    assert len(leads.columns) == 2
+    assert leads.columns[0] == "sales_lead_1"
+    assert leads.columns[1] == "sales_lead_3"
+
+    idx = pd.IndexSlice[:, ["GROCERY I"], [1]]
+    assert (
+        leads.loc[idx, "sales_lead_1"].dropna()
+        == ts_multi_col_data.loc[idx, "sales"].shift(-1).dropna()
+    ).all()
+    assert (
+        leads.loc[idx, "sales_lead_3"].dropna()
+        == ts_multi_col_data.loc[idx, "sales"].shift(-3).dropna()
+    ).all()
+
+
+def test_plot_lags(ts_multi_col_data):
+    df = ts_multi_col_data
+    ts = TimeSeries(df)
+
+    axes = ts.plot_lags(col="sales", lags=[1, 3, 5, 7, 9])
+
+    assert axes.shape == (2, 3)
+    assert axes[0, 0].get_ylabel() == "sales"
+    assert axes[1, 0].get_xlabel() == "sales"
+    assert axes[1, 1].get_ylabel() == ""
+
+    # Check that [1, 2] is invisible
+    assert not axes[1, 2].has_data()
+
+    axes = ts.plot_lags(col="sales", lags=[1, 3, 5])
+    axes = ts.plot_lags(col="sales", lags=[7])
+
+
 def test_ts_get_timestamp_index(ts_data):
     """
     Test the conversion of a PeriodIndex to a TimestampIndex.
@@ -108,12 +170,18 @@ def test_ts_plot_default(ts_data):
     ts = TimeSeries(ts_data)
 
     # Select the number of unique index combinations (excl. date index)
-    idx_len = len(ts_data.droplevel(0).index.unique())
+    uniq_idx = ts_data.droplevel(0).index.unique()
+    idx_len = len(uniq_idx)
 
     # Test the default plot
     axes = ts.plot()
     assert isinstance(axes[0], plt.Axes)
     assert len(axes.flatten()) == idx_len
+
+    assert axes[0].get_title() == f"sales for {uniq_idx[0]}"
+    assert axes[1].get_title() == f"sales for {uniq_idx[1]}"
+    assert axes[0].get_xlabel() == "date"
+    assert axes[0].get_ylabel() == "sales"
 
     fig = plt.gcf()
     assert fig.get_figwidth() == 12
@@ -151,11 +219,14 @@ def test_ts_large_nr_plot():
 
 
 def test_ts_plot_multi_col(ts_multi_col_data):
-    ts = TimeSeries(ts_multi_col_data)
+    df = ts_multi_col_data
+    df["2onpromotion"] = (df["onpromotion"] * 2).copy()
+    df["3onpromotion"] = (df["onpromotion"] * 3).copy()
+    ts = TimeSeries(df)
 
     # Select the number of unique index combinations (excl. date index)
-    idx_len = len(ts_multi_col_data.droplevel(0).index.unique())
-    col_len = len(ts_multi_col_data.columns)
+    idx_len = len(df.droplevel(0).index.unique())
+    col_len = len(df.columns)
 
     # Test the default plot with multiple columns
     axes = ts.plot()
@@ -190,6 +261,15 @@ def test_ts_get_idx_combinations(ts_data):
     ts = TimeSeries(ts_data)
     idx_comb = ts._get_idx_combinations(ts.ts)
     assert (idx_comb == ts_data.droplevel(0).index.unique()).all()
+    assert isinstance(idx_comb[0], tuple)
+
+    ts_two_lvl_idx = ts_data.groupby(level=[0, 1]).mean()
+    ts = TimeSeries(ts_two_lvl_idx)
+    idx_comb = ts._get_idx_combinations(ts.ts)
+    assert isinstance(idx_comb[0], tuple)
+    assert (
+        idx_comb == pd.MultiIndex.from_tuples([("CLEANING",), ("GROCERY I",)])
+    ).all()
 
 
 def test_ts_plot_seasonal_default(ts_data):
@@ -204,12 +284,37 @@ def test_ts_plot_seasonal_default(ts_data):
 
     wks = ts.ts.index.get_level_values(0).week.unique()
     assert len(axes[0].get_lines()) == len(wks)
-    assert axes[0].get_lines()[0]._alpha == 1 / np.sqrt(len(wks))
     assert axes[0].get_lines()[0].get_color() == "red"
     assert axes[0].get_lines()[0].get_linewidth() == 0.5
     assert axes[0].get_xlabel() == "day_of_week"
     assert axes[0].get_ylabel() == "sales"
     assert axes[0].get_title() == "Season (week) for ('GROCERY I', 1)"
+
+
+def test_ts_plot_seasonal_resampled():
+    yrs = 10
+    decade_ts = pd.DataFrame(
+        {"sales": np.random.rand(365 * yrs)},
+        index=pd.date_range(start="2010-01-01", periods=3650, freq="D").to_period("D"),
+    )
+    decade_ts["name"] = "decade_ts"
+    decade_ts = decade_ts.set_index("name", append=True)
+    ts = TimeSeries(decade_ts)
+
+    axes = ts.plot_seasonal(column="sales", period="year", freq="month", resampler="ME")
+    assert len(axes[0].get_lines()) == yrs
+
+    ts_data_check = ts._get_timestamp_index()
+    ts_data_check = (
+        ts_data_check.groupby(pd.Grouper(freq="ME", level=0))
+        .sum()
+        .loc["2010", "sales"]
+        .values
+    )
+
+    y = axes[0].get_lines()[0].get_ydata()
+    assert len(y) == 12
+    assert (ts_data_check == y).all()
 
 
 def test_ts_plot_non_mono_seasonal(ts_data):
@@ -310,6 +415,21 @@ def test_ts_plot_subseries_xgranularity(ts_data):
     for ax in axes:
         assert ax.get_xlabel() == "year"
         assert ax.get_lines()[0].get_xdata()[0] == 2013
+
+
+def test_ts_plot_subseries_single(ts_data):
+    idx = (slice(None), ["GROCERY I"], [1])
+    df = ts_data.loc[idx]
+    ts = TimeSeries(df)
+    fig = ts.plot_subseries(column="sales", freq="day_of_week")
+
+    # Check suptitle
+    axes = fig.get_axes()
+    assert len(axes) == 7
+
+    # Check wspace == 0 of subfigures
+    subfigs = [subfig for subfig in fig.get_children() if isinstance(subfig, SubFigure)]
+    assert len(subfigs) == 1
 
 
 def test_ts_plot_pairs(ts_corr_dummy_data):
